@@ -7,6 +7,7 @@ const TEMPLATE_URL = {
   "126":"/templates/acord-126.pdf", "140":"/templates/acord-140.pdf",
   "127":"/templates/acord-127.pdf", "130":"/templates/acord-130.pdf",
   "70":"/templates/acord-70.pdf", "71":"/templates/acord-71.pdf",
+  "35":"/templates/acord-35.pdf",
 };
 const _tplCache = {};
 async function loadTemplate(id){
@@ -18,7 +19,10 @@ async function loadTemplate(id){
   return bytes;
 }
 
-/* Forms: acro = real fillable fields; overlay = text printed onto a flat scan. */
+/* Forms: "acro" gets tagged fillable in Step 3 (most/all of its data lands in real AcroForm
+   fields); "overlay" gets tagged overlay (it's a flat scan, everything is drawn text). This
+   tag is cosmetic only — fillForm() below fills from CROSSWALK and draws from OVERLAY for
+   whichever maps exist for the form, so a form (like 35) can use both at once. */
 const FORMS = [
   { id:"25",  name:"ACORD 25", title:"Certificate of Liability Insurance", mode:"acro" },
   { id:"28",  name:"ACORD 28", title:"Evidence of Commercial Property", mode:"overlay" },
@@ -28,6 +32,7 @@ const FORMS = [
   { id:"127", name:"ACORD 127", title:"Business Auto Section", mode:"overlay" },
   { id:"130", name:"ACORD 130", title:"Workers Compensation Application", mode:"overlay" },
   { id:"71",  name:"ACORD 71", title:"Personal Auto Policy Change Request", mode:"overlay" },
+  { id:"35",  name:"ACORD 35", title:"Cancellation Request / Policy Release", mode:"acro" },
 ];
 
 /* Real AcroForm field names (verified against each PDF). "insAddr" is a synthetic
@@ -80,6 +85,17 @@ const CROSSWALK = {
     insurerA:"Text16", insurerAnaic:"Text17", producerContact:"Text18",
     policyNumber:"Text19", namedInsured:"Text7", insAddr:"Text8",
     effectiveDate:"Text21", expirationDate:"Text23"
+  },
+  // ACORD 35: most boxes are real AcroForm fields, verified by name against the PDF.
+  // The Producer / Company / Insured "name and address" boxes have no field behind them
+  // at all (blank bordered boxes) — those are filled via OVERLAY["35"] below instead.
+  "35":{
+    producerPhone:"AC No Extl PHONE", insurerAnaic:"NAIC CODE", policyType:"POLICY TYPE",
+    policyNumber:"POLICY NUMBER-0", cancellationDate:"CANCELLATION DATE", cancellationTime:"TIME",
+    effectiveDate:"EFFECTIVE DATE", expirationDate:"EXPIRATION DATE",
+    remarks:"REMARKS ACORD 101 Additional Remarks Schedule may",
+    // POLICY TYPE's box auto-sizes to fill its (tall) height, which blows short text up huge.
+    _fieldSizes:{ policyType:11 }
   }
 };
 
@@ -107,19 +123,29 @@ const OVERLAY = {
     namedInsured:[95,640,8,210], insStreet:[26,606,8,270], cityLine:[26,595,7,270],
     effectiveDate:[315,606,8,88], expirationDate:[505,606,8,88],
   },
+  // ACORD 35's Producer / Company / Insured boxes have no AcroForm field, so their text
+  // is drawn here even though the rest of the form (CROSSWALK["35"]) is real fields.
+  "35":{ _page:0,
+    producerName:[20,760,8,140], producerContact:[20,746,7,140], producerEmail:[20,732,7,140],
+    insurerA:[320,760,8,270],
+    namedInsured:[20,628,8,270], insStreet:[20,614,7,270], cityLine:[20,600,7,270],
+  },
 };
 
 /* Which atomic field keys a given form actually uses, derived straight from its
    CROSSWALK (acro) or OVERLAY (overlay) map — so the Step 2 dashboard always matches
    exactly what that ACORD form can hold, with no separate list to keep in sync. */
 function formKeysFor(id){
-  const map = CROSSWALK[id] || OVERLAY[id];
+  // A form can have a CROSSWALK entry, an OVERLAY entry, or (like ACORD 35) both — merge
+  // whichever exist, since fillForm() below runs both passes when both are present.
   const keys = new Set();
-  if(!map) return keys;
-  Object.keys(map).forEach(k=>{
-    if(k.startsWith("_")) return;
-    if(k==="insAddr"||k==="cityLine"){ ["insStreet","insCity","insState","insZip"].forEach(x=>keys.add(x)); }
-    else keys.add(k);
+  [CROSSWALK[id], OVERLAY[id]].forEach(map=>{
+    if(!map) return;
+    Object.keys(map).forEach(k=>{
+      if(k.startsWith("_")) return;
+      if(k==="insAddr"||k==="cityLine"){ ["insStreet","insCity","insState","insZip"].forEach(x=>keys.add(x)); }
+      else keys.add(k);
+    });
   });
   return keys;
 }
@@ -140,6 +166,10 @@ const REQUEST_SECTIONS = [
   ]},
   { title:"Policy", fields:[
     ["policyNumber","Policy number"],["effectiveDate","Effective date"],["expirationDate","Expiration date"],
+  ]},
+  { title:"Cancellation (ACORD 35)", fields:[
+    ["policyType","Policy type"],["cancellationDate","Cancellation date"],["cancellationTime","Cancellation time"],
+    ["remarks","Reason for cancellation / remarks",true,true],
   ]},
   { title:"Carrier (for the certificate)", fields:[
     ["insurerA","Insurer / carrier",true],["insurerAnaic","NAIC #"],
@@ -284,7 +314,10 @@ async function readEmail(){
     "\nRules: return ONLY the JSON object (no markdown, no code fences, no commentary). Use \"\" for anything not stated. "+
     "Money as digits with commas ($1M -> 1,000,000; 2 million -> 2,000,000). Dates MM/DD/YYYY. "+
     "namedInsured = the business being insured (not the agency). insurerA = the insurance carrier/company. "+
-    "Put the certificate holder into holder* keys. Building square footage -> propBuildingArea.";
+    "Put the certificate holder into holder* keys. Building square footage -> propBuildingArea. "+
+    "cancellationDate is when the policy should be cancelled (MM/DD/YYYY); cancellationTime as HH:MM AM/PM if stated. "+
+    "policyType is the line of business being cancelled (e.g. Auto, General Liability, Property, Package). "+
+    "remarks = the stated reason for cancellation or any other cancellation-specific note.";
   try{
     const resp=await fetch("/api/extract",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({text:raw,system})});
@@ -328,36 +361,43 @@ function clearAgency(){ try{localStorage.removeItem(LS_AGENCY);}catch(e){} curre
   AGENCY_KEYS.forEach(k=>{setVal(k,"");markAgency(k,false);}); agMsg("Agency cleared.",false); }
 
 /* ---- Fill one form ---- */
+// Runs the acro pass (CROSSWALK) and the overlay pass (OVERLAY) — whichever map(s) exist
+// for this form. Most forms only have one; ACORD 35 has both (real fields for most of the
+// form, drawn text for the three "name and address" boxes that have no field behind them).
 async function fillForm(formId){
   const {PDFDocument,StandardFonts,rgb}=PDFLib;
   const doc=await PDFDocument.load(await loadTemplate(formId),{ignoreEncryption:true});
-  const meta=FORMS.find(f=>f.id===formId);
+  let wrote=0;
 
-  if(meta.mode==="overlay"){
+  const acroMap=CROSSWALK[formId];
+  if(acroMap){
+    const form=doc.getForm(); const forceFont=acroMap._fontSize||null; const fieldSizes=acroMap._fieldSizes||{};
+    for(const key of Object.keys(acroMap)){
+      if(key.startsWith("_"))continue;
+      let v = key==="insAddr" ? insAddr() : val(key);
+      if(!v)continue;
+      const size=fieldSizes[key]||forceFont;
+      try{ const tf=form.getTextField(acroMap[key]); if(size){try{tf.setFontSize(size);}catch(e){}} tf.setText(v); wrote++; }catch(e){}
+    }
+    if(acroMap._checks){ for(const cond of Object.keys(acroMap._checks)){ if(val(cond)){ for(const cf of acroMap._checks[cond]){ try{form.getCheckBox(cf).check();}catch(e){} } } } }
+    try{form.updateFieldAppearances();}catch(e){}
+  }
+
+  const overlayMap=OVERLAY[formId];
+  if(overlayMap){
     const font=await doc.embedFont(StandardFonts.Helvetica);
     const ink=rgb(0.03,0.12,0.32);
-    const map=OVERLAY[formId]; const page=doc.getPages()[map._page||0]; let wrote=0;
-    for(const key of Object.keys(map)){
+    const page=doc.getPages()[overlayMap._page||0];
+    for(const key of Object.keys(overlayMap)){
       if(key.startsWith("_"))continue;
       let v = key==="cityLine" ? cityLine() : val(key);
       if(!v)continue;
-      const [x,y,size,mw]=map[key]; let t=String(v);
+      const [x,y,size,mw]=overlayMap[key]; let t=String(v);
       if(mw){ while(t.length&&font.widthOfTextAtSize(t,size)>mw) t=t.slice(0,-1); }
       page.drawText(t,{x,y,size,font,color:ink}); wrote++;
     }
-    return {bytes:await doc.save(), wrote};
   }
 
-  const form=doc.getForm();
-  const map=CROSSWALK[formId]; const forceFont=map._fontSize||null; let wrote=0;
-  for(const key of Object.keys(map)){
-    if(key.startsWith("_"))continue;
-    let v = key==="insAddr" ? insAddr() : val(key);
-    if(!v)continue;
-    try{ const tf=form.getTextField(map[key]); if(forceFont){try{tf.setFontSize(forceFont);}catch(e){}} tf.setText(v); wrote++; }catch(e){}
-  }
-  if(map._checks){ for(const cond of Object.keys(map._checks)){ if(val(cond)){ for(const cf of map._checks[cond]){ try{form.getCheckBox(cf).check();}catch(e){} } } } }
-  try{form.updateFieldAppearances();}catch(e){}
   return {bytes:await doc.save(), wrote};
 }
 function download(bytes,filename){

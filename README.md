@@ -12,12 +12,15 @@ It runs as a static site plus **one serverless function** (`/api/extract`) that 
 | ACORD 70 | Personal Policy Change Request (Except Auto) | real form fields |
 | ACORD 126 | Commercial General Liability | real form fields |
 | ACORD 140 | Property Section | real form fields |
+| ACORD 35 | Cancellation Request / Policy Release | real form fields + text overlay† |
 | ACORD 28 | Evidence of Commercial Property | text overlay* |
 | ACORD 127 | Business Auto Section | text overlay* |
 | ACORD 130 | Workers Compensation Application | text overlay* |
 | ACORD 71 | Personal Auto Policy Change Request | text overlay* |
 
 \* These four PDFs are flat scans with no fillable fields, so the app **prints** your data onto them at fixed positions. This reliably fills the header fields a request email contains (agency, insured, policy #, dates, carrier, limits, location). It does **not** fill the big repeating tables (driver/vehicle schedules, WC class-code tables). To make any of these true fillable forms, replace the file in `templates/` with a genuinely fillable (non-scanned) copy and add its field names to `CROSSWALK` in `app.js`.
+
+† ACORD 35 is mostly real AcroForm fields (policy #, dates, NAIC code, policy type, remarks, etc.), but its Producer / Company / Insured "name and address" boxes have no field behind them at all in the source PDF — those three boxes are filled the overlay way instead. `fillForm()` in `app.js` runs both passes for a form when both `CROSSWALK` and `OVERLAY` entries exist for it.
 
 ## Deploy to GitHub + Vercel
 
