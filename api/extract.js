@@ -1,6 +1,7 @@
-// Serverless function (Vercel) — keeps your Anthropic API key on the server.
-// The browser posts { text, system }; this relays it to Anthropic and returns the result.
-// Set ANTHROPIC_API_KEY (and optionally ANTHROPIC_MODEL) in your Vercel project settings.
+// Serverless function (Vercel) — keeps your Groq API key on the server.
+// The browser posts { text, system }; this relays it to Groq and returns the result.
+// Set GROQ_API_KEY (and optionally GROQ_MODEL) in your Vercel project settings.
+// Get a free key at https://console.groq.com/keys
 
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
@@ -8,12 +9,12 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
-    res.status(500).json({ error: "ANTHROPIC_API_KEY is not set in the server environment." });
+    res.status(500).json({ error: "GROQ_API_KEY is not set in the server environment." });
     return;
   }
-  const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
+  const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 
   // Body is auto-parsed by Vercel when content-type is JSON; fall back to manual parse.
   let body = req.body;
@@ -28,32 +29,31 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
+    const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
+        authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model,
-        max_tokens: 2000,
-        system,
-        messages: [{ role: "user", content: text }],
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: text },
+        ],
       }),
     });
     const data = await r.json();
     if (!r.ok) {
-      res.status(r.status).json({ error: (data && data.error && data.error.message) || "Anthropic API error", detail: data });
+      res.status(r.status).json({ error: (data && data.error && data.error.message) || "Groq API error", detail: data });
       return;
     }
     // Return just the extracted text content for the browser to JSON.parse.
-    const out = (data.content || [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("\n");
+    const out = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
     res.status(200).json({ text: out });
   } catch (e) {
-    res.status(500).json({ error: "Request to Anthropic failed.", detail: String(e) });
+    res.status(500).json({ error: "Request to Groq failed.", detail: String(e) });
   }
 };

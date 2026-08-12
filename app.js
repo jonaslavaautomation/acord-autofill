@@ -1,6 +1,6 @@
 /* ACORD Auto-Fill — frontend logic.
    Templates are served from /templates/*.pdf. Extraction goes through /api/extract
-   (serverless) so the Anthropic key stays on the server. Saved data uses localStorage. */
+   (serverless) so the Groq key stays on the server. Saved data uses localStorage. */
 
 const TEMPLATE_URL = {
   "25":"/templates/acord-25.pdf", "28":"/templates/acord-28.pdf",

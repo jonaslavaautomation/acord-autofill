@@ -2,7 +2,7 @@
 
 Paste a client's/insured's email, and the app reads it and fills your ACORD forms for you — then you download filled PDFs (individually or as one combined packet). No box-by-box typing.
 
-It runs as a static site plus **one serverless function** (`/api/extract`) that talks to the Anthropic API. The API key lives on the server, never in the browser.
+It runs as a static site plus **one serverless function** (`/api/extract`) that talks to the Groq API. The API key lives on the server, never in the browser.
 
 ## Forms included
 
@@ -33,9 +33,9 @@ It runs as a static site plus **one serverless function** (`/api/extract`) that 
 
 2. **Import into Vercel.** Go to vercel.com → *Add New… → Project* → import the repo. No framework, no build command needed — Vercel serves the static files and runs `api/extract.js` automatically.
 
-3. **Add your Anthropic API key.** In Vercel → your project → *Settings → Environment Variables*, add:
-   - `ANTHROPIC_API_KEY` = your key from https://console.anthropic.com
-   - (optional) `ANTHROPIC_MODEL` = `claude-sonnet-5`
+3. **Add your Groq API key.** In Vercel → your project → *Settings → Environment Variables*, add:
+   - `GROQ_API_KEY` = your free key from https://console.groq.com/keys
+   - (optional) `GROQ_MODEL` = `llama-3.3-70b-versatile`
 
    Then **Deploy** (or redeploy so the variable takes effect). That's it.
 
@@ -52,9 +52,9 @@ Opening `index.html` directly (file://) will show the UI but the **Read email & 
 
 - **Templates** live in `templates/*.pdf` and are fetched in the browser.
 - **Filling** is done in the browser with [pdf-lib](https://pdf-lib.js.org/): real fields via `getTextField().setText()`, flat forms via `page.drawText()` at measured coordinates.
-- **Extraction**: the browser posts the pasted text to `/api/extract`, which calls Anthropic server-side and returns structured JSON that populates the form for your review.
+- **Extraction**: the browser posts the pasted text to `/api/extract`, which calls Groq server-side and returns structured JSON that populates the form for your review.
 - **Saved data** (your agency, saved requests) is stored in the browser via `localStorage` — nothing is sent anywhere except the email text you submit for extraction.
 
 ## Privacy note
 
-The only data that leaves the browser is the request text you paste (sent to Anthropic through your serverless function for extraction). Filled PDFs are generated entirely in the browser.
+The only data that leaves the browser is the request text you paste (sent to Groq through your serverless function for extraction). Filled PDFs are generated entirely in the browser.
