@@ -109,6 +109,29 @@ const OVERLAY = {
   },
 };
 
+/* Which atomic field keys a given form actually uses, derived straight from its
+   CROSSWALK (acro) or OVERLAY (overlay) map — so the Step 2 dashboard always matches
+   exactly what that ACORD form can hold, with no separate list to keep in sync. */
+function formKeysFor(id){
+  const map = CROSSWALK[id] || OVERLAY[id];
+  const keys = new Set();
+  if(!map) return keys;
+  Object.keys(map).forEach(k=>{
+    if(k.startsWith("_")) return;
+    if(k==="insAddr"||k==="cityLine"){ ["insStreet","insCity","insState","insZip"].forEach(x=>keys.add(x)); }
+    else keys.add(k);
+  });
+  return keys;
+}
+/* Union of keys for every currently checked form (Step 3). Nothing checked -> show everything. */
+function activeKeys(){
+  const ids=[...selected];
+  if(!ids.length) return new Set(REQUEST_KEYS);
+  const s=new Set();
+  ids.forEach(id=>formKeysFor(id).forEach(k=>s.add(k)));
+  return s;
+}
+
 /* ---- Field UI ---- */
 const REQUEST_SECTIONS = [
   { title:"Insured", fields:[
@@ -149,11 +172,14 @@ const LS_AGENCY="acordAF.agency", LS_REQUESTS="acordAF.requests";
 let autoKeys=new Set(), agencyKeys=new Set(), currentAgency=null;
 let selected=new Set(["25"]);
 
-/* Render request fields */
+/* Render request fields. Every field always exists in the DOM (so values/badges survive
+   toggling forms) — refreshFieldsView() below just shows/hides cells per selected form. */
 const fieldsWrap=document.getElementById("fields");
+const fieldCells={}; const sectionEls=[];
 REQUEST_SECTIONS.forEach(sec=>{
   const t=document.createElement("div");t.className="sec-title";t.textContent=sec.title;fieldsWrap.appendChild(t);
   const g=document.createElement("div");g.className="fgrid";
+  const keys=[];
   sec.fields.forEach(f=>{
     const [key,label,full,area]=f;
     const cell=document.createElement("div");cell.className="f"+(full?" full":"");
@@ -161,9 +187,28 @@ REQUEST_SECTIONS.forEach(sec=>{
     const el=document.createElement(area?"textarea":"input");el.className="in";el.id="fld-"+key;
     el.addEventListener("input",()=>{ if(autoKeys.has(key)){autoKeys.delete(key);badge(key);} });
     cell.appendChild(lab);cell.appendChild(el);g.appendChild(cell);
+    fieldCells[key]=cell; keys.push(key);
   });
   fieldsWrap.appendChild(g);
+  sectionEls.push({t,g,keys});
 });
+/* Show only the fields the checked form(s) actually use, and label which form(s) that is. */
+function refreshFieldsView(){
+  const active=activeKeys();
+  sectionEls.forEach(({t,g,keys})=>{
+    let any=false;
+    keys.forEach(k=>{
+      const show=active.has(k); if(show)any=true;
+      const cell=fieldCells[k]; if(cell) cell.style.display=show?"":"none";
+    });
+    t.style.display=any?"":"none"; g.style.display=any?"":"none";
+  });
+  const note=document.getElementById("fieldsNote"); if(!note)return;
+  const ids=[...selected];
+  if(!ids.length){ note.textContent="Check a form in Step 3 to narrow this to exactly the fields it uses."; return; }
+  const names=FORMS.filter(f=>selected.has(f.id)).map(f=>f.name);
+  note.textContent="Showing fields used by "+names.join(", ")+".";
+}
 
 /* Render agency fields */
 const agWrap=document.getElementById("agencyFields");
@@ -182,7 +227,7 @@ FORMS.forEach(fm=>{
   const row=document.createElement("div");row.className="form-row";
   const cb=document.createElement("input");cb.type="checkbox";cb.id="form-"+fm.id;
   cb.checked=selected.has(fm.id);
-  cb.addEventListener("change",()=>{cb.checked?selected.add(fm.id):selected.delete(fm.id);});
+  cb.addEventListener("change",()=>{cb.checked?selected.add(fm.id):selected.delete(fm.id);refreshFieldsView();});
   const meta=document.createElement("div");meta.className="meta";
   meta.innerHTML='<div class="nm">'+fm.name+'</div><div class="ds">'+fm.title+'</div>';
   const tag=document.createElement("span");
@@ -213,9 +258,19 @@ function insAddr(){ return [val("insStreet"), cityLine()].filter(Boolean).join("
 
 /* ---- Step 1: extraction via serverless proxy ---- */
 function schemaHint(){
-  const r=REQUEST_SECTIONS.flatMap(s=>s.fields.map(f=>'"'+f[0]+'"')).join(", ");
+  // Only hint at the keys the currently checked form(s) in Step 3 actually use, so the
+  // model's attention (and the Step 2 dashboard) both track the exact ACORD form(s) picked.
+  const active=activeKeys();
+  const r=REQUEST_SECTIONS.flatMap(s=>s.fields.filter(f=>active.has(f[0])).map(f=>'"'+f[0]+'"')).join(", ");
   const a=AGENCY_FIELDS.map(f=>'"'+f[0]+'"').join(", ");
   return "Request keys: "+r+"\nAgency keys (only if the email states the agency): "+a;
+}
+function selectedFormsContext(){
+  const ids=[...selected];
+  if(!ids.length) return "";
+  const names=FORMS.filter(f=>selected.has(f.id)).map(f=>f.name+" ("+f.title+")").join("; ");
+  return "This extraction is for these exact ACORD forms: "+names+". Only pull data that form(s) would actually show — "+
+    "read each requested key as that form's own field, not a generic guess. ";
 }
 async function readEmail(){
   const raw=document.getElementById("paste").value.trim();
@@ -225,6 +280,7 @@ async function readEmail(){
   const system=
     "You are an insurance submission intake assistant. Read the pasted client/insured email and extract everything you "+
     "recognize into ONE JSON object using ONLY these exact keys:\n"+schemaHint()+
+    "\n"+selectedFormsContext()+
     "\nRules: return ONLY the JSON object (no markdown, no code fences, no commentary). Use \"\" for anything not stated. "+
     "Money as digits with commas ($1M -> 1,000,000; 2 million -> 2,000,000). Dates MM/DD/YYYY. "+
     "namedInsured = the business being insured (not the agency). insurerA = the insurance carrier/company. "+
@@ -244,7 +300,7 @@ async function readEmail(){
     msg.textContent="Filled "+n+" field"+(n===1?"":"s")+" from the email (highlighted green). Review Step 2, then download in Step 3.";
   }catch(e){
     msg.className="msg err";
-    msg.textContent="Couldn't read that: "+(e.message||e)+". If this says the API key isn't set, add ANTHROPIC_API_KEY in your Vercel project settings.";
+    msg.textContent="Couldn't read that: "+(e.message||e)+". If this says the API key isn't set, add GROQ_API_KEY in your Vercel project settings.";
   }
   finally{ btn.disabled=false; btn.textContent="Read email & fill"; }
 }
@@ -354,7 +410,7 @@ function loadReq(name){
   if(!name)return; const all=readRequests(); const d=all[name]; if(!d)return;
   autoKeys=new Set();
   REQUEST_KEYS.forEach(k=>{setVal(k,d[k]||"");badge(k);});
-  if(Array.isArray(d._forms)){ selected=new Set(d._forms); FORMS.forEach(f=>{const cb=document.getElementById("form-"+f.id);if(cb)cb.checked=selected.has(f.id);}); }
+  if(Array.isArray(d._forms)){ selected=new Set(d._forms); FORMS.forEach(f=>{const cb=document.getElementById("form-"+f.id);if(cb)cb.checked=selected.has(f.id);}); refreshFieldsView(); }
   if(currentAgency)applyAgency(currentAgency);
   const m=document.getElementById("reqMsg");m.style.color="var(--green)";m.textContent='Loaded "'+name+'".';
 }
@@ -368,4 +424,4 @@ document.getElementById("dlEach").addEventListener("click",downloadEach);
 document.getElementById("dlPacket").addEventListener("click",downloadPacket);
 document.getElementById("saveReqBtn").addEventListener("click",saveReq);
 document.getElementById("loadReq").addEventListener("change",e=>loadReq(e.target.value));
-loadAgency(); refreshReqList();
+loadAgency(); refreshReqList(); refreshFieldsView();

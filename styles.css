@@ -35,6 +35,7 @@ textarea.paste{width:100%;min-height:120px;resize:vertical;border-radius:8px;bor
 .card h2{font-size:14.5px;font-weight:800;margin:0 0 3px;}
 .card .cap{font-size:11.5px;color:var(--soft);margin:0 0 13px;}
 .divide{border-bottom:1px solid var(--line);margin:0 0 13px;}
+.fields-note{font-size:11.5px;color:var(--soft);margin:-4px 0 13px;}
 .sec-title{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--soft);font-weight:800;margin:16px 0 9px;}
 .sec-title:first-child{margin-top:2px;}
 .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:11px 12px;}
