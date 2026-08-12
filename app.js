@@ -126,8 +126,8 @@ const OVERLAY = {
   // ACORD 35's Producer / Company / Insured boxes have no AcroForm field, so their text
   // is drawn here even though the rest of the form (CROSSWALK["35"]) is real fields.
   "35":{ _page:0,
-    producerName:[20,760,8,140], producerContact:[20,746,7,140], producerEmail:[20,732,7,140],
-    insurerA:[320,760,8,270],
+    producerName:[20,712,8,140], producerContact:[20,698,7,140], producerEmail:[20,684,7,140],
+    insurerA:[320,712,8,270],
     namedInsured:[20,628,8,270], insStreet:[20,614,7,270], cityLine:[20,600,7,270],
   },
 };
