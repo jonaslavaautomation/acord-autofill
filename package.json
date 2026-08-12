@@ -1,0 +1,10 @@
+{
+  "name": "acord-autofill",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Paste a client email; auto-fill ACORD forms; download filled PDFs.",
+  "scripts": {
+    "dev": "vercel dev",
+    "start": "vercel dev"
+  }
+}

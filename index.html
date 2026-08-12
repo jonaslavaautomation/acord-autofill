@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ACORD Auto-Fill</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>ACORD Auto-Fill</h1>
+    <p class="sub">Paste the client's request → it fills the ACORD forms for you → download. No box-by-box typing.</p>
+  </header>
+
+  <section class="paste-card">
+    <div class="step">Step 1 — Paste the request</div>
+    <textarea id="paste" class="paste" placeholder="Paste the insured's / client's email here — however they wrote it. Example:  Please issue a COI for Acme Welding LLC, 142 Industrial Rd, Springfield IL 62704. Carrier Travelers (NAIC 25658). GL policy GL-99123 eff 01/01/2026-01/01/2027, occurrence form, $1M each occurrence / $2M aggregate / $2M products / $1M personal & adv. Cert holder: City of Springfield, 800 E Monroe St, Springfield IL 62701. Operations: general welding & fabrication."></textarea>
+    <div class="paste-actions">
+      <button id="readBtn" class="btn primary big">Read email &amp; fill</button>
+      <button id="clearBtn" class="btn ghost">Clear</button>
+      <span class="hint">Reading again replaces the request details — paste full context, not just a change.</span>
+    </div>
+    <div id="readMsg"></div>
+  </section>
+
+  <div class="grid">
+    <div class="col">
+      <div class="card">
+        <div class="step amber">Step 2 — Review what it understood</div>
+        <div class="divide"></div>
+        <div id="fields"></div>
+      </div>
+    </div>
+
+    <aside class="col">
+      <div class="card">
+        <h2>My Agency</h2>
+        <p class="cap">Register once — auto-fills on every form, and a pasted email never erases it.</p>
+        <div class="fgrid" id="agencyFields"></div>
+        <div class="saverow" style="margin-top:12px;">
+          <button id="saveAgencyBtn" class="btn primary" style="flex:1;">Save my agency</button>
+          <button id="clearAgencyBtn" class="btn small">Clear</button>
+        </div>
+        <div id="agencyMsg" class="savemsg"></div>
+      </div>
+
+      <div class="card">
+        <div class="step amber">Step 3 — Pick forms &amp; download</div>
+        <div class="divide"></div>
+        <div id="formList"></div>
+        <div class="dl">
+          <button id="dlEach" class="btn sec">Download selected (separate files)</button>
+          <button id="dlPacket" class="btn primary">Download as one packet</button>
+        </div>
+        <div id="dlMsg" class="savemsg"></div>
+      </div>
+
+      <div class="card">
+        <h2>Saved requests</h2>
+        <p class="cap">Keep a request by insured name to reissue later.</p>
+        <div class="saverow">
+          <button id="saveReqBtn" class="btn small" style="flex:1;">Save this request</button>
+          <select id="loadReq" class="in"><option value="" disabled selected>Load…</option></select>
+        </div>
+        <div id="reqMsg" class="savemsg"></div>
+      </div>
+    </aside>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
