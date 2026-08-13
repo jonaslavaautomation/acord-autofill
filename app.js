@@ -1,6 +1,11 @@
 /* ACORD Auto-Fill — frontend logic.
    Templates are served from /templates/*.pdf. Extraction goes through /api/extract
-   (serverless) so the Groq key stays on the server. Saved data uses localStorage. */
+   (serverless) so the Groq key stays on the server. Saved data uses localStorage.
+   Declaration Page upload (PDF text via pdf.js, OCR fallback via Tesseract.js) runs
+   entirely in the browser — only the extracted text is sent to /api/extract. */
+if(window.pdfjsLib){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js";
+}
 
 const TEMPLATE_URL = {
   "25":"/templates/acord-25.pdf", "28":"/templates/acord-28.pdf",
@@ -199,7 +204,11 @@ const REQUEST_KEYS = REQUEST_SECTIONS.flatMap(s=>s.fields.map(f=>f[0]));
 const AGENCY_KEYS = AGENCY_FIELDS.map(f=>f[0]);
 
 const LS_AGENCY="acordAF.agency", LS_REQUESTS="acordAF.requests";
-let autoKeys=new Set(), agencyKeys=new Set(), currentAgency=null;
+// autoKeys maps key -> source ("email" | "decpage"), so badge() can label + color each
+// field by where it actually came from, and later sources know which fields are safe to
+// overwrite (auto-filled) vs. must leave alone (user-typed or an agency value).
+const SOURCE_LABEL = { email:{cls:"", text:"from email"}, decpage:{cls:"dp", text:"from dec page"} };
+let autoKeys=new Map(), agencyKeys=new Set(), currentAgency=null;
 let selected=new Set(["25"]);
 
 /* Render request fields. Every field always exists in the DOM (so values/badges survive
@@ -215,7 +224,7 @@ REQUEST_SECTIONS.forEach(sec=>{
     const cell=document.createElement("div");cell.className="f"+(full?" full":"");
     const lab=document.createElement("label");lab.id="lab-"+key;lab.textContent=label;
     const el=document.createElement(area?"textarea":"input");el.className="in";el.id="fld-"+key;
-    el.addEventListener("input",()=>{ if(autoKeys.has(key)){autoKeys.delete(key);badge(key);} });
+    el.addEventListener("input",()=>{ if(autoKeys.has(key)){autoKeys.delete(key);badge(key);} refreshMissingNote(); });
     cell.appendChild(lab);cell.appendChild(el);g.appendChild(cell);
     fieldCells[key]=cell; keys.push(key);
   });
@@ -233,11 +242,31 @@ function refreshFieldsView(){
     });
     t.style.display=any?"":"none"; g.style.display=any?"":"none";
   });
-  const note=document.getElementById("fieldsNote"); if(!note)return;
+  const note=document.getElementById("fieldsNote");
+  if(note){
+    const ids=[...selected];
+    if(!ids.length){ note.textContent="Check a form in Step 3 to narrow this to exactly the fields it uses."; }
+    else{ const names=FORMS.filter(f=>selected.has(f.id)).map(f=>f.name); note.textContent="Showing fields used by "+names.join(", ")+"."; }
+  }
+  refreshMissingNote();
+}
+/* Flags empty "full" fields (the ones REQUEST_SECTIONS marks as important, e.g. Named
+   Insured, Certificate holder) that the currently checked form(s) actually use — the
+   closest thing to "ask the user for just what's missing" without a separate wizard. */
+function refreshMissingNote(){
+  const note=document.getElementById("missingNote"); if(!note)return;
   const ids=[...selected];
-  if(!ids.length){ note.textContent="Check a form in Step 3 to narrow this to exactly the fields it uses."; return; }
-  const names=FORMS.filter(f=>selected.has(f.id)).map(f=>f.name);
-  note.textContent="Showing fields used by "+names.join(", ")+".";
+  if(!ids.length){ note.hidden=true; return; }
+  const active=activeKeys();
+  const missing=[];
+  REQUEST_SECTIONS.forEach(sec=>sec.fields.forEach(f=>{
+    const [key,label,full]=f;
+    if(full && active.has(key) && val(key)==="") missing.push(label);
+  }));
+  if(!missing.length){ note.hidden=true; return; }
+  const names=FORMS.filter(f=>selected.has(f.id)).map(f=>f.name).join(", ");
+  note.hidden=false;
+  note.textContent="Missing for "+names+": "+missing.join(", ")+".";
 }
 
 /* Render agency fields */
@@ -270,13 +299,19 @@ FORMS.forEach(fm=>{
 function badge(key){
   const lab=document.getElementById("lab-"+key), fld=document.getElementById("fld-"+key);
   if(!lab)return; const ex=lab.querySelector(".badge:not(.ag)");
-  if(autoKeys.has(key)){ if(!ex){const b=document.createElement("span");b.className="badge";b.textContent="from email";lab.appendChild(b);} fld.classList.add("g"); }
-  else{ if(ex)ex.remove(); fld.classList.remove("g"); }
+  const src=autoKeys.get(key);
+  if(src){
+    const info=SOURCE_LABEL[src]||SOURCE_LABEL.email;
+    const cls="badge"+(info.cls?" "+info.cls:"");
+    if(!ex){ const b=document.createElement("span"); b.className=cls; b.textContent=info.text; lab.appendChild(b); }
+    else{ ex.className=cls; ex.textContent=info.text; }
+    fld.classList.remove("g","dp"); fld.classList.add(info.cls==="dp"?"dp":"g");
+  }else{ if(ex)ex.remove(); fld.classList.remove("g","dp"); }
 }
 function markAgency(key,on){
   const lab=document.getElementById("lab-"+key), fld=document.getElementById("fld-"+key);
   if(!lab)return; const ex=lab.querySelector(".badge.ag");
-  if(on){ autoKeys.delete(key); const g=lab.querySelector(".badge:not(.ag)"); if(g)g.remove(); fld.classList.remove("g");
+  if(on){ autoKeys.delete(key); const g=lab.querySelector(".badge:not(.ag)"); if(g)g.remove(); fld.classList.remove("g","dp");
     if(!ex){const b=document.createElement("span");b.className="badge ag";b.textContent="my agency";lab.appendChild(b);}
     fld.classList.add("a"); agencyKeys.add(key);
   }else{ if(ex)ex.remove(); fld.classList.remove("a"); agencyKeys.delete(key); }
@@ -285,6 +320,29 @@ const val=k=>{const e=document.getElementById("fld-"+k);return e?e.value.trim():
 const setVal=(k,v)=>{const e=document.getElementById("fld-"+k);if(e)e.value=v;};
 function cityLine(){ return [val("insCity"),val("insState"),val("insZip")].filter(Boolean).join(" "); }
 function insAddr(){ return [val("insStreet"), cityLine()].filter(Boolean).join(", "); }
+
+/* ---- Request -> ACORD form classifier (client-side, no AI call needed) ---- */
+// Explicit "ACORD 25"-style mentions always win. Otherwise fall back to phrasing that
+// implies a form without naming it (COI, cancellation, workers comp, etc).
+const FORM_KEYWORDS = [
+  { id:"25",  re:/certificate of liability|\bcoi\b/i },
+  { id:"28",  re:/evidence of (commercial )?property/i },
+  { id:"35",  re:/\bcancel(l?ed|l?ation)?\b/i },
+  { id:"126", re:/general liability application|\bcgl\b/i },
+  { id:"127", re:/business auto section|commercial auto/i },
+  { id:"130", re:/workers'?\s*comp(ensation)?/i },
+  { id:"140", re:/\bproperty section\b/i },
+  { id:"71",  re:/personal auto (policy )?change|garage coverage/i },
+  { id:"70",  re:/personal policy change/i },
+];
+function classifyForms(text){
+  const explicit=new Set();
+  for(const m of text.matchAll(/acord[\s#-]*(\d{2,3})/gi)){ if(TEMPLATE_URL[m[1]]) explicit.add(m[1]); }
+  if(explicit.size) return explicit;
+  const found=new Set();
+  FORM_KEYWORDS.forEach(({id,re})=>{ if(re.test(text)) found.add(id); });
+  return found;
+}
 
 /* ---- Step 1: extraction via serverless proxy ---- */
 function schemaHint(){
@@ -307,6 +365,19 @@ async function readEmail(){
   const msg=document.getElementById("readMsg");
   if(!raw){msg.className="msg err";msg.textContent="Paste the client's email first.";return;}
   const btn=document.getElementById("readBtn");btn.disabled=true;btn.textContent="Reading…";msg.className="";msg.textContent="";
+
+  // Classify which ACORD form(s) this request needs BEFORE building the extraction prompt,
+  // so schemaHint()/selectedFormsContext() below scope the AI call to the right form(s) too.
+  // Silent (doesn't touch Step 3) when nothing in the text points at a form.
+  let formNote="";
+  const classified=classifyForms(raw);
+  if(classified.size){
+    selected=classified;
+    FORMS.forEach(f=>{ const cb=document.getElementById("form-"+f.id); if(cb) cb.checked=selected.has(f.id); });
+    refreshFieldsView();
+    formNote=" Picked "+FORMS.filter(f=>selected.has(f.id)).map(f=>f.name).join(", ")+" in Step 3 based on the request.";
+  }
+
   const system=
     "You are an insurance submission intake assistant. Read the pasted client/insured email and extract everything you "+
     "recognize into ONE JSON object using ONLY these exact keys:\n"+schemaHint()+
@@ -325,12 +396,13 @@ async function readEmail(){
     if(!resp.ok) throw new Error(data && data.error ? data.error : "extraction failed");
     let text=(data.text||"").replace(/```json|```/g,"").trim();
     const parsed=JSON.parse(text);
-    autoKeys=new Set(); let n=0;
-    REQUEST_KEYS.forEach(k=>{ const v=parsed[k]; if(v!=null&&String(v).trim()!==""){setVal(k,String(v).trim());autoKeys.add(k);n++;} else setVal(k,""); badge(k); });
+    autoKeys=new Map(); let n=0;
+    REQUEST_KEYS.forEach(k=>{ const v=parsed[k]; if(v!=null&&String(v).trim()!==""){setVal(k,String(v).trim());autoKeys.set(k,"email");n++;} else setVal(k,""); badge(k); });
     if(currentAgency){ applyAgency(currentAgency); }
     else { AGENCY_KEYS.forEach(k=>{ const v=parsed[k]; if(v!=null&&String(v).trim()!==""){setVal(k,String(v).trim());} }); }
     msg.className="msg ok";
-    msg.textContent="Filled "+n+" field"+(n===1?"":"s")+" from the email (highlighted green). Review Step 2, then download in Step 3.";
+    msg.textContent="Filled "+n+" field"+(n===1?"":"s")+" from the email (highlighted green)."+formNote+" Review Step 2, then download in Step 3.";
+    refreshMissingNote();
   }catch(e){
     msg.className="msg err";
     msg.textContent="Couldn't read that: "+(e.message||e)+". If this says the API key isn't set, add GROQ_API_KEY in your Vercel project settings.";
@@ -338,9 +410,120 @@ async function readEmail(){
   finally{ btn.disabled=false; btn.textContent="Read email & fill"; }
 }
 function clearRequest(){
-  REQUEST_KEYS.forEach(k=>{setVal(k,"");}); autoKeys=new Set(); REQUEST_KEYS.forEach(badge);
+  REQUEST_KEYS.forEach(k=>{setVal(k,"");}); autoKeys=new Map(); REQUEST_KEYS.forEach(badge);
   document.getElementById("paste").value="";
   const msg=document.getElementById("readMsg");msg.className="msg ok";msg.textContent="Cleared the request. Your saved agency stays.";
+  refreshMissingNote();
+}
+
+/* ---- Declaration Page upload: pdf.js text extraction, OCR fallback, AI extraction ---- */
+function showDecProgress(on){
+  document.getElementById("decProgress").hidden=!on;
+  if(on) setDecProgress(0,"");
+}
+function setDecProgress(frac,label){
+  document.getElementById("decProgressFill").style.width=Math.round(Math.max(0,Math.min(1,frac))*100)+"%";
+  document.getElementById("decProgressText").textContent=label||"";
+}
+// Renders a PDF page to a canvas and OCRs it client-side. Only called for pages with no
+// extractable text (i.e. scanned/photographed pages) — a fresh Tesseract worker per page
+// is simplest for a first version; it's slower than a persistent worker but needs no setup.
+async function ocrPage(page){
+  const viewport=page.getViewport({scale:2.2});
+  const canvas=document.createElement("canvas");
+  canvas.width=viewport.width; canvas.height=viewport.height;
+  await page.render({canvasContext:canvas.getContext("2d"), viewport}).promise;
+  const {data}=await Tesseract.recognize(canvas,"eng");
+  return data.text||"";
+}
+// Extracts text per page via pdf.js; any page whose real text layer is too short to be
+// useful (i.e. it's a scan, not a digital PDF) falls back to OCR instead.
+async function extractPdfPages(file,onProgress){
+  const buf=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:new Uint8Array(buf)}).promise;
+  const pages=[];
+  for(let i=1;i<=pdf.numPages;i++){
+    const page=await pdf.getPage(i);
+    const content=await page.getTextContent();
+    let text=content.items.map(it=>it.str).join(" ").replace(/\s+/g," ").trim();
+    if(text.length<20){
+      onProgress&&onProgress(0.05+(i-1)/pdf.numPages*0.8,"Page "+i+" of "+pdf.numPages+" looks scanned — running OCR (can take a bit)…");
+      text=await ocrPage(page);
+    }else{
+      onProgress&&onProgress(0.05+(i-1)/pdf.numPages*0.8,"Reading page "+i+" of "+pdf.numPages+"…");
+    }
+    pages.push(text);
+  }
+  return pages;
+}
+function decPageSystemPrompt(){
+  const keys=REQUEST_KEYS.map(k=>'"'+k+'"').join(", ");
+  return "You are an experienced insurance CSR reading a policy Declarations (\"Dec\") page — it may be digital or OCR'd from a scan, "+
+    "so expect occasional OCR noise. Extract every value you can find into ONE JSON object using ONLY these exact keys: "+keys+
+    ". Rules: return ONLY the JSON object (no markdown, no commentary). Use \"\" for anything not present. "+
+    "namedInsured = the named insured on the policy (not the agency). insurerA = the carrier/insurance company name; insurerAnaic = its NAIC number if shown. "+
+    "producerName/producerContact/producerPhone/producerFax/producerEmail = the AGENCY/producer of record printed on the page, if any — never the carrier. "+
+    "policyNumber/effectiveDate/expirationDate = the policy's own number and term dates (MM/DD/YYYY). "+
+    "For General Liability pages map limits to glEachOcc/glGenAgg/glProducts/glPersonalAdv/glFireDamage/glMedExp. "+
+    "propBuildingArea is only a square-footage figure, never a dollar coverage limit — leave it blank if you don't see square feet. "+
+    "This page may be Homeowners, Auto, Commercial Auto, General Liability, Workers Compensation, BOP, or Umbrella — use whichever "+
+    "of the listed keys applies and skip the rest (do not invent new keys for coverages this list has no field for, e.g. vehicle "+
+    "schedules or dwelling Coverage A-F — leaving those out is correct, not a mistake). "+
+    "Also return \"_docType\" as your one-line best guess of the policy's line of business (e.g. \"Homeowners HO-3\", \"Commercial Auto\", "+
+    "\"General Liability\", \"Workers Compensation\").";
+}
+async function readDecPage(file){
+  const msg=document.getElementById("decMsg"); msg.className=""; msg.textContent="";
+  showDecProgress(true);
+  try{
+    setDecProgress(0.02,"Opening PDF…");
+    const pages=await extractPdfPages(file,setDecProgress);
+    const text=pages.map((t,i)=>"--- Page "+(i+1)+" ---\n"+t).join("\n\n");
+    if(!text.replace(/---.*?---/g,"").trim()) throw new Error("couldn't find any text on that PDF, even after OCR");
+    setDecProgress(0.9,"Extracting policy data…");
+    const resp=await fetch("/api/extract",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({text,system:decPageSystemPrompt()})});
+    const data=await resp.json();
+    if(!resp.ok) throw new Error(data&&data.error?data.error:"extraction failed");
+    const raw=(data.text||"").replace(/```json|```/g,"").trim();
+    const parsed=JSON.parse(raw);
+    let n=0;
+    REQUEST_KEYS.forEach(k=>{
+      const v=parsed[k]; if(v==null||String(v).trim()==="")return;
+      // Don't clobber a value the user typed by hand or that came from a saved agency —
+      // only overwrite blanks or values that were themselves auto-filled (email/dec page).
+      if(val(k)!==""&&!autoKeys.has(k))return;
+      setVal(k,String(v).trim()); autoKeys.set(k,"decpage"); badge(k); n++;
+    });
+    setDecProgress(1,"Done.");
+    const docType=parsed._docType?" Detected: "+parsed._docType+".":"";
+    msg.className="msg ok";
+    msg.textContent="Filled "+n+" field"+(n===1?"":"s")+" from the Dec Page (highlighted blue)."+docType+" Review Step 2.";
+    refreshMissingNote();
+  }catch(e){
+    msg.className="msg err";
+    msg.textContent="Couldn't read that PDF: "+(e.message||e)+". If this says the API key isn't set, add GROQ_API_KEY in your Vercel project settings.";
+  }finally{
+    setTimeout(()=>showDecProgress(false),900);
+  }
+}
+function handleDecFile(file){
+  if(file.type!=="application/pdf"&&!/\.pdf$/i.test(file.name)){
+    const msg=document.getElementById("decMsg"); msg.className="msg err"; msg.textContent="Please drop a PDF file.";
+    return;
+  }
+  readDecPage(file);
+}
+function wireDecUpload(){
+  const drop=document.getElementById("decDrop"), fileInput=document.getElementById("decFile"), browseBtn=document.getElementById("decBrowseBtn");
+  const openPicker=e=>{ e&&e.stopPropagation(); fileInput.click(); };
+  browseBtn.addEventListener("click",openPicker);
+  drop.addEventListener("click",openPicker);
+  drop.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openPicker(); } });
+  fileInput.addEventListener("change",()=>{ if(fileInput.files[0]) handleDecFile(fileInput.files[0]); fileInput.value=""; });
+  ["dragenter","dragover"].forEach(evt=>drop.addEventListener(evt,e=>{ e.preventDefault(); drop.classList.add("drag"); }));
+  ["dragleave","drop"].forEach(evt=>drop.addEventListener(evt,e=>{ e.preventDefault(); drop.classList.remove("drag"); }));
+  drop.addEventListener("drop",e=>{ const f=e.dataTransfer.files&&e.dataTransfer.files[0]; if(f)handleDecFile(f); });
 }
 
 /* ---- Agency (localStorage) ---- */
@@ -448,11 +631,12 @@ function saveReq(){
 }
 function loadReq(name){
   if(!name)return; const all=readRequests(); const d=all[name]; if(!d)return;
-  autoKeys=new Set();
+  autoKeys=new Map();
   REQUEST_KEYS.forEach(k=>{setVal(k,d[k]||"");badge(k);});
   if(Array.isArray(d._forms)){ selected=new Set(d._forms); FORMS.forEach(f=>{const cb=document.getElementById("form-"+f.id);if(cb)cb.checked=selected.has(f.id);}); refreshFieldsView(); }
   if(currentAgency)applyAgency(currentAgency);
   const m=document.getElementById("reqMsg");m.style.color="var(--green)";m.textContent='Loaded "'+name+'".';
+  refreshMissingNote();
 }
 
 /* ---- wire ---- */
@@ -464,4 +648,4 @@ document.getElementById("dlEach").addEventListener("click",downloadEach);
 document.getElementById("dlPacket").addEventListener("click",downloadPacket);
 document.getElementById("saveReqBtn").addEventListener("click",saveReq);
 document.getElementById("loadReq").addEventListener("change",e=>loadReq(e.target.value));
-loadAgency(); refreshReqList(); refreshFieldsView();
+loadAgency(); refreshReqList(); refreshFieldsView(); wireDecUpload();

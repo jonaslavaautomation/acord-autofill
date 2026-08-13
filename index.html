@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ACORD Auto-Fill</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -25,11 +27,29 @@
     <div id="readMsg"></div>
   </section>
 
+  <section class="paste-card dec-card">
+    <div class="step">Step 1B — Or upload a Declaration Page <span class="opt">(optional)</span></div>
+    <p class="dec-sub">Drop the policy's Dec Page PDF to pull in policy, carrier, and coverage details. Works on regular PDFs and on scanned/photographed pages — OCR runs right in your browser, nothing leaves your machine except the extracted text sent for AI extraction.</p>
+    <div id="decDrop" class="dec-drop" tabindex="0">
+      <input type="file" id="decFile" accept="application/pdf" hidden />
+      <div class="dec-drop-inner">
+        <strong>Drop a Dec Page PDF here</strong>
+        <span>or <button type="button" id="decBrowseBtn" class="linklike">browse a file</button></span>
+      </div>
+    </div>
+    <div id="decProgress" class="dec-progress" hidden>
+      <div class="dec-progress-bar"><div id="decProgressFill" class="dec-progress-fill"></div></div>
+      <div id="decProgressText" class="dec-progress-text"></div>
+    </div>
+    <div id="decMsg"></div>
+  </section>
+
   <div class="grid">
     <div class="col">
       <div class="card">
         <div class="step amber">Step 2 — Review what it understood</div>
         <div id="fieldsNote" class="fields-note"></div>
+        <div id="missingNote" class="missing-note" hidden></div>
         <div class="divide"></div>
         <div id="fields"></div>
       </div>
