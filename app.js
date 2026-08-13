@@ -112,9 +112,30 @@ const OVERLAY = {
     namedInsured:[20,590,8,260], insStreet:[20,578,7,180], cityLine:[20,567,7,180],
     policyNumber:[478,590,8,120], effectiveDate:[315,563,8,90], expirationDate:[398,563,8,90], operations:[20,503,8,540],
   },
+  // ACORD 127 is a flat 3-page scan (0 real fields). Page 1 (_pages index 0) has the header
+  // + a driver schedule; the vehicle schedule (Make/Model/VIN x4) is on page 3 (index 2).
+  // NOTE: ACORD 127 has no coverage/limit fields at all — its own "COVERAGES / LIMITS" box
+  // literally says "USE ACORD 137 FOR YOUR STATE" — so there's nowhere on this form to put
+  // an auto liability limit; that only exists on ACORD 137, which isn't in this app yet.
+  // Positions verified by rendering pdf.js's own text-item coordinates for every label on
+  // both pages, then confirmed by filling + re-rendering.
   "127":{ _page:0,
+    _pages:{ veh1Make:2,veh1Model:2,veh1Vin:2, veh2Make:2,veh2Model:2,veh2Vin:2,
+             veh3Make:2,veh3Model:2,veh3Vin:2, veh4Make:2,veh4Model:2,veh4Vin:2 },
     producerName:[24,706,8,300], insurerA:[316,706,8,150], insurerAnaic:[550,706,8,58],
     policyNumber:[24,679,8,300], effectiveDate:[352,679,8,70], namedInsured:[432,679,8,160],
+    // Driver Information grid, page 1 — Name / DOB / License# only (the grid's other columns
+    // — sex, marital status, yrs exp, state lic, date hire, %use, etc. — are underwriting
+    // detail a Dec Page essentially never states, so there's nothing to extract for them).
+    drv1Name:[84,585,7,118], drv1Dob:[233,585,7,65], drv1License:[349,585,7,83],
+    drv2Name:[84,558,7,118], drv2Dob:[233,558,7,65], drv2License:[349,558,7,83],
+    drv3Name:[84,531,7,118], drv3Dob:[233,531,7,65], drv3License:[349,531,7,83],
+    // Vehicle Description schedule, page 3 — 4 vehicle slots exist on the form itself
+    // (a 5th+ vehicle needs an ACORD 129 attachment, same as the form's own instructions).
+    veh1Make:[113,740.5,7,125], veh1Model:[113,728.5,7,125], veh1Vin:[268,728.5,7,130],
+    veh2Make:[113,620.5,7,125], veh2Model:[113,608.5,7,125], veh2Vin:[268,608.5,7,130],
+    veh3Make:[113,500.5,7,125], veh3Model:[113,488.5,7,125], veh3Vin:[268,488.5,7,130],
+    veh4Make:[113,380.5,7,125], veh4Model:[113,368.5,7,125], veh4Vin:[268,368.5,7,130],
   },
   "130":{ _page:0,
     producerName:[24,731,8,300], insurerA:[398,739,8,210], namedInsured:[398,717,8,210],
@@ -175,6 +196,17 @@ const REQUEST_SECTIONS = [
   { title:"Cancellation (ACORD 35)", fields:[
     ["policyType","Policy type"],["cancellationDate","Cancellation date"],["cancellationTime","Cancellation time"],
     ["remarks","Reason for cancellation / remarks",true,true],
+  ]},
+  { title:"Vehicles (ACORD 127, up to 4 — Make/Model/VIN only)", fields:[
+    ["veh1Make","Vehicle 1 — Make"],["veh1Model","Vehicle 1 — Model"],["veh1Vin","Vehicle 1 — VIN"],
+    ["veh2Make","Vehicle 2 — Make"],["veh2Model","Vehicle 2 — Model"],["veh2Vin","Vehicle 2 — VIN"],
+    ["veh3Make","Vehicle 3 — Make"],["veh3Model","Vehicle 3 — Model"],["veh3Vin","Vehicle 3 — VIN"],
+    ["veh4Make","Vehicle 4 — Make"],["veh4Model","Vehicle 4 — Model"],["veh4Vin","Vehicle 4 — VIN"],
+  ]},
+  { title:"Drivers (ACORD 127, up to 3 — Name/DOB/License# only)", fields:[
+    ["drv1Name","Driver 1 — Name"],["drv1Dob","Driver 1 — DOB"],["drv1License","Driver 1 — License #"],
+    ["drv2Name","Driver 2 — Name"],["drv2Dob","Driver 2 — DOB"],["drv2License","Driver 2 — License #"],
+    ["drv3Name","Driver 3 — Name"],["drv3Dob","Driver 3 — DOB"],["drv3License","Driver 3 — License #"],
   ]},
   { title:"Carrier (for the certificate)", fields:[
     ["insurerA","Insurer / carrier",true],["insurerAnaic","NAIC #"],
@@ -388,7 +420,9 @@ async function readEmail(){
     "Put the certificate holder into holder* keys. Building square footage -> propBuildingArea. "+
     "cancellationDate is when the policy should be cancelled (MM/DD/YYYY); cancellationTime as HH:MM AM/PM if stated. "+
     "policyType is the line of business being cancelled (e.g. Auto, General Liability, Property, Package). "+
-    "remarks = the stated reason for cancellation or any other cancellation-specific note.";
+    "remarks = the stated reason for cancellation or any other cancellation-specific note. "+
+    "If vehicles are mentioned, map them in order to veh1Make/veh1Model/veh1Vin, then veh2*/veh3*/veh4* (max 4). "+
+    "If drivers are mentioned, map them in order to drv1Name/drv1Dob/drv1License, then drv2*/drv3* (max 3).";
   try{
     const resp=await fetch("/api/extract",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({text:raw,system})});
@@ -457,7 +491,10 @@ async function extractPdfPages(file,onProgress){
   return pages;
 }
 function decPageSystemPrompt(){
-  const keys=REQUEST_KEYS.map(k=>'"'+k+'"').join(", ");
+  // Include AGENCY_KEYS too — the Producer/agency block printed on a Dec Page is a real,
+  // useful source for those fields (readDecPage() below only uses it when no "My Agency" is
+  // saved, same protection readEmail()'s agency branch already gives a saved agency).
+  const keys=REQUEST_KEYS.concat(AGENCY_KEYS).map(k=>'"'+k+'"').join(", ");
   return "You are an experienced insurance CSR reading a policy Declarations (\"Dec\") page — it may be digital or OCR'd from a scan, "+
     "so expect occasional OCR noise. Extract every value you can find into ONE JSON object using ONLY these exact keys: "+keys+
     ". Rules: return ONLY the JSON object (no markdown, no commentary). Use \"\" for anything not present. "+
@@ -466,9 +503,15 @@ function decPageSystemPrompt(){
     "policyNumber/effectiveDate/expirationDate = the policy's own number and term dates (MM/DD/YYYY). "+
     "For General Liability pages map limits to glEachOcc/glGenAgg/glProducts/glPersonalAdv/glFireDamage/glMedExp. "+
     "propBuildingArea is only a square-footage figure, never a dollar coverage limit — leave it blank if you don't see square feet. "+
+    "If a vehicle schedule is present, map vehicles IN ORDER to veh1Make/veh1Model/veh1Vin, then veh2*, veh3*, veh4* — there is room "+
+    "for at most 4 vehicles, so ignore any beyond the fourth (there's nowhere to put them). Do the same for a driver list, in order, "+
+    "into drv1Name/drv1Dob/drv1License, then drv2*, drv3* — at most 3, ignore the rest. Leave a slot's keys as \"\" if there's no "+
+    "that-numbered vehicle/driver (e.g. only 2 vehicles shown -> leave every veh3*/veh4* key blank). "+
     "This page may be Homeowners, Auto, Commercial Auto, General Liability, Workers Compensation, BOP, or Umbrella — use whichever "+
-    "of the listed keys applies and skip the rest (do not invent new keys for coverages this list has no field for, e.g. vehicle "+
-    "schedules or dwelling Coverage A-F — leaving those out is correct, not a mistake). "+
+    "of the listed keys applies and skip the rest (do not invent new keys for coverages this list has no field for, e.g. dwelling "+
+    "Coverage A-F or WC class codes/payroll — leaving those out is correct, not a mistake). Auto/GL liability limits, comp/collision "+
+    "deductibles, and coverage descriptions likewise have no key here — ACORD 127 itself has no field for them (it defers to ACORD 137), "+
+    "so don't return them under another key's name. "+
     "Also return \"_docType\" as your one-line best guess of the policy's line of business (e.g. \"Homeowners HO-3\", \"Commercial Auto\", "+
     "\"General Liability\", \"Workers Compensation\").";
 }
@@ -495,6 +538,11 @@ async function readDecPage(file){
       if(val(k)!==""&&!autoKeys.has(k))return;
       setVal(k,String(v).trim()); autoKeys.set(k,"decpage"); badge(k); n++;
     });
+    // Producer/agency block: a saved "My Agency" always wins (same guarantee readEmail()
+    // gives it) — otherwise take whatever agency info the Dec Page itself shows, into any
+    // still-blank agency field.
+    if(currentAgency){ applyAgency(currentAgency); }
+    else{ AGENCY_KEYS.forEach(k=>{ const v=parsed[k]; if(v!=null&&String(v).trim()!==""&&val(k)===""){ setVal(k,String(v).trim()); n++; } }); }
     setDecProgress(1,"Done.");
     const docType=parsed._docType?" Detected: "+parsed._docType+".":"";
     msg.className="msg ok";
@@ -570,13 +618,16 @@ async function fillForm(formId){
   if(overlayMap){
     const font=await doc.embedFont(StandardFonts.Helvetica);
     const ink=rgb(0.03,0.12,0.32);
-    const page=doc.getPages()[overlayMap._page||0];
+    const pages=doc.getPages(); const pageOverrides=overlayMap._pages||{};
     for(const key of Object.keys(overlayMap)){
       if(key.startsWith("_"))continue;
       let v = key==="cityLine" ? cityLine() : val(key);
       if(!v)continue;
       const [x,y,size,mw]=overlayMap[key]; let t=String(v);
       if(mw){ while(t.length&&font.widthOfTextAtSize(t,size)>mw) t=t.slice(0,-1); }
+      // Most forms draw everything on one page (_page); a form like 127 spans pages
+      // (header on page 1, vehicle schedule on page 3) so _pages can override per key.
+      const page=pages[pageOverrides[key]!=null?pageOverrides[key]:(overlayMap._page||0)];
       page.drawText(t,{x,y,size,font,color:ink}); wrote++;
     }
   }
