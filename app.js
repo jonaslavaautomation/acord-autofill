@@ -243,10 +243,12 @@ const REQUEST_KEYS = REQUEST_SECTIONS.flatMap(s=>s.fields.map(f=>f[0]));
 const AGENCY_KEYS = AGENCY_FIELDS.map(f=>f[0]);
 
 const LS_AGENCY="acordAF.agency", LS_REQUESTS="acordAF.requests";
-// autoKeys maps key -> source ("email" | "decpage"), so badge() can label + color each
-// field by where it actually came from, and later sources know which fields are safe to
-// overwrite (auto-filled) vs. must leave alone (user-typed or an agency value).
-const SOURCE_LABEL = { email:{cls:"", text:"from email"}, decpage:{cls:"dp", text:"from dec page"} };
+// autoKeys maps key -> source ("email" | "decpage" | "command"), so badge() can label + color
+// each field by where it actually came from, and later sources know which fields are safe to
+// overwrite (auto-filled) vs. must leave alone (user-typed or an agency value). "command" is
+// the one exception — a typed command is a direct instruction, so it always overwrites (see
+// runCommand() below), same as you typing into the field yourself.
+const SOURCE_LABEL = { email:{cls:"", text:"from email"}, decpage:{cls:"dp", text:"from dec page"}, command:{cls:"cmd", text:"from command"} };
 let autoKeys=new Map(), agencyKeys=new Set(), currentAgency=null;
 let selected=new Set(["25"]);
 
@@ -340,18 +342,19 @@ function badge(key){
   const lab=document.getElementById("lab-"+key), fld=document.getElementById("fld-"+key);
   if(!lab)return; const ex=lab.querySelector(".badge:not(.ag)");
   const src=autoKeys.get(key);
+  fld.classList.remove("g","dp","cmd");
   if(src){
     const info=SOURCE_LABEL[src]||SOURCE_LABEL.email;
     const cls="badge"+(info.cls?" "+info.cls:"");
     if(!ex){ const b=document.createElement("span"); b.className=cls; b.textContent=info.text; lab.appendChild(b); }
     else{ ex.className=cls; ex.textContent=info.text; }
-    fld.classList.remove("g","dp"); fld.classList.add(info.cls==="dp"?"dp":"g");
-  }else{ if(ex)ex.remove(); fld.classList.remove("g","dp"); }
+    fld.classList.add(info.cls||"g");
+  }else{ if(ex)ex.remove(); }
 }
 function markAgency(key,on){
   const lab=document.getElementById("lab-"+key), fld=document.getElementById("fld-"+key);
   if(!lab)return; const ex=lab.querySelector(".badge.ag");
-  if(on){ autoKeys.delete(key); const g=lab.querySelector(".badge:not(.ag)"); if(g)g.remove(); fld.classList.remove("g","dp");
+  if(on){ autoKeys.delete(key); const g=lab.querySelector(".badge:not(.ag)"); if(g)g.remove(); fld.classList.remove("g","dp","cmd");
     if(!ex){const b=document.createElement("span");b.className="badge ag";b.textContent="my agency";lab.appendChild(b);}
     fld.classList.add("a"); agencyKeys.add(key);
   }else{ if(ex)ex.remove(); fld.classList.remove("a"); agencyKeys.delete(key); }
@@ -586,14 +589,55 @@ function wireDecUpload(){
   drop.addEventListener("drop",e=>{ const f=e.dataTransfer.files&&e.dataTransfer.files[0]; if(f)handleDecFile(f); });
 }
 
-/* ---- Agency (localStorage) ---- */
+/* ---- Cloud sync (Supabase, optional) ----
+   No accounts: a device that knows the sync code can read/write that code's row. That's a
+   convenience boundary, not a security one — anyone who learns your code (and the anon key,
+   which ships in this app's own JS) can read or overwrite that row. Fine for a private tool;
+   don't treat the code like a password. See README for the table/RLS setup and this trade-off. */
+const LS_SYNC_CODE="acordAF.syncCode";
+const supabaseClient = (window.supabase && window.SUPABASE_URL && window.SUPABASE_ANON_KEY && !/YOUR-/.test(window.SUPABASE_URL))
+  ? window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+function getSyncCode(){ try{ return localStorage.getItem(LS_SYNC_CODE)||""; }catch(e){ return ""; } }
+function setSyncCodeLocal(code){ try{ localStorage.setItem(LS_SYNC_CODE,code); }catch(e){} }
+// Fire-and-forget: cloud sync is a nice-to-have, so a failure here should never block or
+// error out the save the user actually asked for (saveAgency/saveReq already succeeded
+// locally by the time this runs).
+async function pushCloud(){
+  if(!supabaseClient)return; const code=getSyncCode(); if(!code)return;
+  try{ await supabaseClient.from("acord_sync").upsert({ code, agency:currentAgency||null, requests:readRequests(), updated_at:new Date().toISOString() }); }
+  catch(e){ console.warn("cloud sync push failed",e); }
+}
+async function pullCloud(code){
+  if(!supabaseClient||!code)return null;
+  try{ const {data,error}=await supabaseClient.from("acord_sync").select("*").eq("code",code).maybeSingle();
+    if(error)throw error; return data; }
+  catch(e){ console.warn("cloud sync pull failed",e); return null; }
+}
+function syncMsg(t,err){ const el=document.getElementById("syncMsg"); if(el){el.textContent=t;el.style.color=err?"#a33":"var(--green)";} }
+async function connectSync(){
+  const code=document.getElementById("syncCodeInput").value.trim();
+  if(!supabaseClient){ syncMsg("Not configured — add your project's URL/key to supabase-config.js first.",true); return; }
+  if(!code){ syncMsg("Enter a sync code first.",true); return; }
+  setSyncCodeLocal(code); syncMsg("Connecting…");
+  const row=await pullCloud(code);
+  if(row){
+    if(row.agency){ currentAgency=row.agency; applyAgency(currentAgency); try{localStorage.setItem(LS_AGENCY,JSON.stringify(currentAgency));}catch(e){} }
+    if(row.requests){ try{localStorage.setItem(LS_REQUESTS,JSON.stringify(row.requests));}catch(e){} refreshReqList(); }
+    syncMsg('Connected as "'+code+'" — pulled your saved agency and requests.');
+  }else{
+    await pushCloud();
+    syncMsg('Connected as "'+code+'" — nothing saved under that code yet, so this device\'s data is now the starting point.');
+  }
+}
+
+/* ---- Agency (localStorage + cloud sync) ---- */
 function applyAgency(d){ AGENCY_KEYS.forEach(k=>{const v=(d&&d[k])?String(d[k]):"";setVal(k,v);markAgency(k,v.trim()!=="");}); }
 function agMsg(t,err){const el=document.getElementById("agencyMsg");el.textContent=t;el.style.color=err?"#a33":"var(--green)";}
 function saveAgency(){
   const d={}; AGENCY_KEYS.forEach(k=>d[k]=val(k));
   if(!d.producerName){agMsg("Enter your agency name first.",true);return;}
   try{ localStorage.setItem(LS_AGENCY,JSON.stringify(d)); currentAgency=d; applyAgency(d);
-    agMsg('Saved "'+d.producerName+'" — auto-fills every form.'); }catch(e){agMsg("Save failed.",true);}
+    agMsg('Saved "'+d.producerName+'" — auto-fills every form.'); pushCloud(); }catch(e){agMsg("Save failed.",true);}
 }
 function loadAgency(){
   try{ const s=localStorage.getItem(LS_AGENCY); if(s){ const d=JSON.parse(s); currentAgency=d; applyAgency(d);
@@ -601,7 +645,7 @@ function loadAgency(){
   agMsg("No agency saved yet. Fill the Producer fields and click Save my agency.",false);
 }
 function clearAgency(){ try{localStorage.removeItem(LS_AGENCY);}catch(e){} currentAgency=null;
-  AGENCY_KEYS.forEach(k=>{setVal(k,"");markAgency(k,false);}); agMsg("Agency cleared.",false); }
+  AGENCY_KEYS.forEach(k=>{setVal(k,"");markAgency(k,false);}); agMsg("Agency cleared.",false); pushCloud(); }
 
 /* ---- Fill one form ---- */
 // Runs the acro pass (CROSSWALK) and the overlay pass (OVERLAY) — whichever map(s) exist
@@ -690,7 +734,7 @@ function saveReq(){
   const d={}; REQUEST_KEYS.forEach(k=>d[k]=val(k)); d._forms=[...selected];
   const all=readRequests(); all[name]=d;
   try{ localStorage.setItem(LS_REQUESTS,JSON.stringify(all)); refreshReqList();
-    msg.style.color="var(--green)";msg.textContent='Saved "'+name+'".'; }catch(e){msg.style.color="#a33";msg.textContent="Save failed.";}
+    msg.style.color="var(--green)";msg.textContent='Saved "'+name+'".'; pushCloud(); }catch(e){msg.style.color="#a33";msg.textContent="Save failed.";}
 }
 function loadReq(name){
   if(!name)return; const all=readRequests(); const d=all[name]; if(!d)return;
@@ -702,6 +746,68 @@ function loadReq(name){
   refreshMissingNote();
 }
 
+/* ---- Command the AI (Step 4) ----
+   Drives the SAME verified engine as everything else — it only ever sets/appends values on
+   the existing REQUEST_KEYS/AGENCY_KEYS list and toggles the existing Step 3 checkboxes /
+   download buttons. It never decides *where on a PDF* something goes; that placement stays
+   exactly as verified in CROSSWALK/OVERLAY. This is deliberate: letting the model improvise
+   PDF coordinates would undo the render-and-verify work every form above needed. */
+function commandSystemPrompt(){
+  const allKeys=REQUEST_KEYS.concat(AGENCY_KEYS);
+  const state=allKeys.map(k=>k+"="+JSON.stringify(val(k))).filter(s=>!/=""$/.test(s)).join(", ")||"(nothing filled in yet)";
+  const formList=FORMS.map(f=>f.id+":"+f.name+" ("+f.title+")").join("; ");
+  return "You operate an ACORD form-filling tool on the user's typed command. Return ONLY a JSON object shaped like: "+
+    '{"summary":"one sentence describing what you did","setFields":{},"appendFields":{},"selectForms":[],"deselectForms":[],"downloadAction":null} '+
+    "— every key optional except summary; no markdown, no commentary outside the JSON. "+
+    "setFields/appendFields keys must come ONLY from this exact list, no others: "+allKeys.map(k=>'"'+k+'"').join(", ")+". "+
+    "setFields REPLACES a field's value outright (a limit, a date, a name, a policy #). appendFields only applies to the free-text "+
+    "fields (operations, remarks, decPageNotes) when the command is ADDING something rather than replacing it (e.g. \"add XYZ Holdings "+
+    "as additional insured\" -> append a line to operations or decPageNotes — there is no dedicated additional-insured key, so don't "+
+    "invent one). Money as digits with commas ($2M -> 2,000,000). Dates MM/DD/YYYY. "+
+    "selectForms/deselectForms are ACORD form ids from: "+formList+". Currently checked: "+([...selected].join(", ")||"none")+". "+
+    "Use deselectForms when the command implies ONLY certain forms now (e.g. \"just the certificate\"); use selectForms to add more "+
+    "without removing what's checked otherwise. downloadAction is \"each\" or \"packet\" ONLY if the command explicitly asks to "+
+    "download/generate/export/produce the PDF — leave it null if it's just describing what to set. "+
+    "Current field values, for context: "+state;
+}
+async function runCommand(){
+  const input=document.getElementById("cmdInput"); const text=input.value.trim();
+  const msg=document.getElementById("cmdMsg");
+  if(!text){ msg.style.color="#a33"; msg.textContent="Type a command first."; return; }
+  const btn=document.getElementById("cmdBtn"); btn.disabled=true; btn.textContent="Working…";
+  msg.style.color="var(--soft)"; msg.textContent="Thinking…";
+  try{
+    const resp=await fetch("/api/extract",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({text,system:commandSystemPrompt()})});
+    const data=await resp.json();
+    if(!resp.ok) throw new Error(data&&data.error?data.error:"command failed");
+    const raw=(data.text||"").replace(/```json|```/g,"").trim();
+    const cmd=JSON.parse(raw);
+    const allKeys=new Set(REQUEST_KEYS.concat(AGENCY_KEYS)); let changed=0;
+    if(cmd.setFields) Object.keys(cmd.setFields).forEach(k=>{
+      if(!allKeys.has(k))return; const v=cmd.setFields[k]; if(v==null)return;
+      setVal(k,String(v)); autoKeys.set(k,"command"); badge(k); changed++;
+    });
+    if(cmd.appendFields) Object.keys(cmd.appendFields).forEach(k=>{
+      if(!allKeys.has(k))return; const v=cmd.appendFields[k]; if(v==null||String(v).trim()==="")return;
+      const cur=val(k); setVal(k,cur?cur+"\n"+String(v).trim():String(v).trim());
+      autoKeys.set(k,"command"); badge(k); changed++;
+    });
+    if(Array.isArray(cmd.deselectForms)) cmd.deselectForms.forEach(id=>{ if(TEMPLATE_URL[id]){ selected.delete(id); const cb=document.getElementById("form-"+id); if(cb)cb.checked=false; } });
+    if(Array.isArray(cmd.selectForms)) cmd.selectForms.forEach(id=>{ if(TEMPLATE_URL[id]){ selected.add(id); const cb=document.getElementById("form-"+id); if(cb)cb.checked=true; } });
+    refreshFieldsView();
+    let dlNote="";
+    if(cmd.downloadAction==="each"){ await downloadEach(); dlNote=" Downloaded separate files."; }
+    else if(cmd.downloadAction==="packet"){ await downloadPacket(); dlNote=" Downloaded packet."; }
+    msg.style.color="var(--green)";
+    msg.textContent=(cmd.summary||("Updated "+changed+" field"+(changed===1?"":"s")+".")) + dlNote;
+  }catch(e){
+    msg.style.color="#a33"; msg.textContent="Command failed: "+(e.message||e);
+  }finally{
+    btn.disabled=false; btn.textContent="Run command";
+  }
+}
+
 /* ---- wire ---- */
 document.getElementById("readBtn").addEventListener("click",readEmail);
 document.getElementById("clearBtn").addEventListener("click",clearRequest);
@@ -711,4 +817,19 @@ document.getElementById("dlEach").addEventListener("click",downloadEach);
 document.getElementById("dlPacket").addEventListener("click",downloadPacket);
 document.getElementById("saveReqBtn").addEventListener("click",saveReq);
 document.getElementById("loadReq").addEventListener("change",e=>loadReq(e.target.value));
+document.getElementById("cmdBtn").addEventListener("click",runCommand);
+document.getElementById("syncConnectBtn").addEventListener("click",connectSync);
 loadAgency(); refreshReqList(); refreshFieldsView(); wireDecUpload();
+// If this device already has a sync code, quietly pull the latest cloud state on load —
+// re-typing the code (connectSync) is only needed to set it the first time on a device.
+(function(){
+  const code=getSyncCode();
+  if(code){ document.getElementById("syncCodeInput").value=code;
+    if(supabaseClient){ pullCloud(code).then(row=>{
+      if(!row)return;
+      if(row.agency){ currentAgency=row.agency; applyAgency(currentAgency); try{localStorage.setItem(LS_AGENCY,JSON.stringify(currentAgency));}catch(e){} }
+      if(row.requests){ try{localStorage.setItem(LS_REQUESTS,JSON.stringify(row.requests));}catch(e){} refreshReqList(); }
+      syncMsg('Synced as "'+code+'".');
+    }); }
+  }
+})();

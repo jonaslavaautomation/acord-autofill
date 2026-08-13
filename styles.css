@@ -4,6 +4,7 @@
   --green:#2f7d5b; --green-bg:#e6f3ec; --green-line:#bfe0cf; --muted:#f4f6f5;
   --blue:#2b5f9e; --blue-bg:#e8f0fa; --blue-line:#c3d8ef;
   --red:#a33; --red-bg:#fbeaea; --red-line:#eec7c7;
+  --violet:#6b3fa0; --violet-bg:#f1e9f8; --violet-line:#d9c5ec;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
@@ -55,6 +56,9 @@ textarea.paste{width:100%;min-height:120px;resize:vertical;border-radius:8px;bor
 .dec-progress-text{font-size:12px;color:#93a4b1;margin-top:6px;}
 .badge.dp{color:var(--blue);background:var(--blue-bg);border-color:var(--blue-line);}
 .in.dp{background:var(--blue-bg);border-color:var(--blue-line);}
+.badge.cmd{color:var(--violet);background:var(--violet-bg);border-color:var(--violet-line);}
+.in.cmd{background:var(--violet-bg);border-color:var(--violet-line);}
+.cmd-in{min-height:64px;}
 .sec-title{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--soft);font-weight:800;margin:16px 0 9px;}
 .sec-title:first-child{margin-top:2px;}
 .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:11px 12px;}

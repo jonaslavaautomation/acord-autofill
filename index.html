@@ -7,6 +7,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="/supabase-config.js"></script>
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -79,6 +81,16 @@
       </div>
 
       <div class="card">
+        <div class="step amber">Step 4 — Command the AI <span class="opt">(optional)</span></div>
+        <p class="cap">Tell it what to do — set a value, pick forms, or download — in plain English.</p>
+        <textarea id="cmdInput" class="in cmd-in" placeholder='e.g. &quot;Set each occurrence to $2,000,000 and general aggregate to $4,000,000, then download ACORD 25.&quot;'></textarea>
+        <div class="saverow" style="margin-top:9px;">
+          <button id="cmdBtn" class="btn primary" style="flex:1;">Run command</button>
+        </div>
+        <div id="cmdMsg" class="savemsg"></div>
+      </div>
+
+      <div class="card">
         <h2>Saved requests</h2>
         <p class="cap">Keep a request by insured name to reissue later.</p>
         <div class="saverow">
@@ -86,6 +98,16 @@
           <select id="loadReq" class="in"><option value="" disabled selected>Load…</option></select>
         </div>
         <div id="reqMsg" class="savemsg"></div>
+      </div>
+
+      <div class="card">
+        <h2>Sync across devices <span class="opt">(optional)</span></h2>
+        <p class="cap">Set a code once here, enter the same code on another device, and My Agency + Saved requests follow you. Needs a Supabase project — see <code>supabase-config.js</code>.</p>
+        <div class="saverow">
+          <input type="text" id="syncCodeInput" class="in" placeholder="e.g. lava-automation" />
+          <button id="syncConnectBtn" class="btn small">Connect</button>
+        </div>
+        <div id="syncMsg" class="savemsg"></div>
       </div>
     </aside>
   </div>

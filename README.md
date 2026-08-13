@@ -47,6 +47,41 @@ It runs as a static site plus **one serverless function** (`/api/extract`) that 
 
 OCR also spins up a fresh Tesseract worker per scanned page (simplest to build, correct, but slower than a persistent worker) — expect a real pause on multi-page scans, and expect it to struggle the way any OCR does on low-quality photos/faxes.
 
+## Command the AI (Step 4)
+
+A text box that lets you tell the app what to do in plain English — e.g. *"Set each occurrence to $2,000,000 and general aggregate to $4,000,000, add XYZ Holdings LLC as additional insured, and make sure only the certificate is selected."*
+
+It's a control layer on top of the exact same engine everything else uses — **it never decides where on a PDF something goes.** `runCommand()` sends your command plus the current field values and Step 3 selection to `/api/extract` with a prompt (`commandSystemPrompt()`) that must respond with only:
+```json
+{"summary":"...", "setFields":{}, "appendFields":{}, "selectForms":[], "deselectForms":[], "downloadAction":null}
+```
+`setFields`/`appendFields` keys are restricted to the exact same `REQUEST_KEYS`/`AGENCY_KEYS` list every other feature uses — `setFields` replaces a value outright (a limit, a date, a name), `appendFields` only applies to the free-text fields (Operations, Remarks, `decPageNotes`) and adds a line rather than overwriting, which is how "add X as additional insured" lands without a dedicated field for it. `selectForms`/`deselectForms` toggle Step 3's checkboxes, and `downloadAction` (`"each"` or `"packet"`) only fires if the command actually asked to download something. Fields set this way get a violet **from command** badge and — unlike the email/Dec Page sources — always overwrite, since a typed command is a direct instruction, the same as if you'd typed into the field yourself.
+
+The reason placement stays fixed: every coordinate and field name in `CROSSWALK`/`OVERLAY` was hand-verified by actually filling the real template and re-rendering it (see ACORD 35 and 127 above) — letting a model improvise PDF positions on a flat scanned form would throw that away for the sake of flexibility it doesn't need here.
+
+## Cloud sync (Supabase, optional)
+
+Lets "My Agency" and "Saved requests" follow you across devices/browsers instead of living in one browser's `localStorage`. No accounts, no login screen — you set a private **sync code** once (Step 4's sidebar, bottom card), and entering that same code on another device pulls the same data down.
+
+**Setup:**
+1. Create a free project at [supabase.com](https://supabase.com).
+2. In the SQL editor, run:
+   ```sql
+   create table acord_sync (
+     code text primary key,
+     agency jsonb,
+     requests jsonb,
+     updated_at timestamptz default now()
+   );
+   alter table acord_sync enable row level security;
+   create policy "anon read/write" on acord_sync for all using (true) with check (true);
+   ```
+3. In your project's *Settings → API*, copy the **Project URL** and the **anon/public key** into `supabase-config.js` (replacing the `YOUR-PROJECT`/`YOUR-ANON-PUBLIC-KEY` placeholders), then commit and redeploy. The anon key is meant to be public — that's Supabase's client-side model — so it's fine to check in.
+
+**The security trade-off, plainly:** that `using (true)` policy means anyone who has both the anon key (which ships in this app's own JS — not a secret) *and* your sync code can read or overwrite that row. There's no per-user auth here. Treat the sync code like the URL to a private tool, not like a password — this is meant for one person/agency syncing their own two devices, not a multi-tenant product. If you need real per-user separation, that's Supabase Auth + row-level policies keyed to `auth.uid()` instead of an open policy — a bigger addition, not done here.
+
+**What it does and doesn't sync:** only "My Agency" and "Saved requests" (the same two things `localStorage` already held). It does not sync in-progress Step 2 field values, uploaded Dec Pages, or generated PDFs — none of that was asked for, and this app still generates every PDF client-side with nothing uploaded anywhere except the extracted text sent to `/api/extract`.
+
 ## Deploy to GitHub + Vercel
 
 1. **Create a GitHub repo and push this folder.**
@@ -81,9 +116,9 @@ Opening `index.html` directly (file://) will show the UI but the **Read email & 
 - **Templates** live in `templates/*.pdf` and are fetched in the browser.
 - **Filling** is done in the browser with [pdf-lib](https://pdf-lib.js.org/): real fields via `getTextField().setText()`, flat forms via `page.drawText()` at measured coordinates.
 - **Dec Page reading** is done in the browser with [pdf.js](https://mozilla.github.io/pdf.js/) (text layer) and [Tesseract.js](https://github.com/naptha/tesseract.js) (OCR fallback for scans) — see "Declaration Page upload" above.
-- **Extraction**: the browser posts extracted text (pasted email or Dec Page text) to `/api/extract`, which calls Groq server-side and returns structured JSON that populates the form for your review.
-- **Saved data** (your agency, saved requests) is stored in the browser via `localStorage` — nothing is sent anywhere except the text submitted for extraction.
+- **Extraction**: the browser posts extracted text (pasted email, Dec Page text, or a typed command) to `/api/extract`, which calls Groq server-side and returns structured JSON that populates the form, or drives Step 4's command actions, for your review.
+- **Saved data** (your agency, saved requests) is stored in the browser via `localStorage`, and — if you've set up Supabase — also synced to your `acord_sync` table under your sync code. See "Cloud sync" above.
 
 ## Privacy note
 
-The only data that leaves the browser is the request text you paste, or the text extracted from an uploaded Dec Page PDF (sent to Groq through your serverless function for extraction). The PDF file itself, and any OCR of it, never leaves the browser. Filled PDFs are generated entirely in the browser.
+The only data that leaves the browser is the request text you paste, the text extracted from an uploaded Dec Page PDF, or a Step 4 command (all sent to Groq through your serverless function for extraction/interpretation). The PDF file itself, and any OCR of it, never leaves the browser. Filled PDFs are generated entirely in the browser. If Supabase sync is configured, your agency info and saved requests are also sent to your own Supabase project — see the security trade-off under "Cloud sync" above.
