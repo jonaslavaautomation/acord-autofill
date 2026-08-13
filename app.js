@@ -226,6 +226,13 @@ const REQUEST_SECTIONS = [
     ["holderName","Holder name",true],["holderStreet","Street",true],
     ["holderCity","City"],["holderState","State"],["holderZip","ZIP"],
   ]},
+  // Always visible (not filtered by which form is checked) — anything a Dec Page or email
+  // states that doesn't fit a mapped key lands here instead of being silently dropped. It
+  // never writes onto a PDF (no form has a field for it); it's a review aid so nothing the
+  // AI notices gets lost just because there's no dedicated key for it yet.
+  { title:"Additional details found (not on any form yet)", alwaysShow:true, fields:[
+    ["decPageNotes","Notes",true,true],
+  ]},
 ];
 const AGENCY_FIELDS = [
   ["producerName","Agency name",true],["producerContact","Contact name",true],
@@ -261,15 +268,16 @@ REQUEST_SECTIONS.forEach(sec=>{
     fieldCells[key]=cell; keys.push(key);
   });
   fieldsWrap.appendChild(g);
-  sectionEls.push({t,g,keys});
+  sectionEls.push({t,g,keys,alwaysShow:!!sec.alwaysShow});
 });
-/* Show only the fields the checked form(s) actually use, and label which form(s) that is. */
+/* Show only the fields the checked form(s) actually use, and label which form(s) that is.
+   Sections marked alwaysShow (the catch-all "Additional details" notes) ignore this filter. */
 function refreshFieldsView(){
   const active=activeKeys();
-  sectionEls.forEach(({t,g,keys})=>{
-    let any=false;
+  sectionEls.forEach(({t,g,keys,alwaysShow})=>{
+    let any=alwaysShow;
     keys.forEach(k=>{
-      const show=active.has(k); if(show)any=true;
+      const show=alwaysShow||active.has(k); if(show)any=true;
       const cell=fieldCells[k]; if(cell) cell.style.display=show?"":"none";
     });
     t.style.display=any?"":"none"; g.style.display=any?"":"none";
@@ -380,8 +388,9 @@ function classifyForms(text){
 function schemaHint(){
   // Only hint at the keys the currently checked form(s) in Step 3 actually use, so the
   // model's attention (and the Step 2 dashboard) both track the exact ACORD form(s) picked.
+  // decPageNotes is exempt — it's the always-visible catch-all, never form-scoped.
   const active=activeKeys();
-  const r=REQUEST_SECTIONS.flatMap(s=>s.fields.filter(f=>active.has(f[0])).map(f=>'"'+f[0]+'"')).join(", ");
+  const r=REQUEST_SECTIONS.flatMap(s=>s.fields.filter(f=>s.alwaysShow||active.has(f[0])).map(f=>'"'+f[0]+'"')).join(", ");
   const a=AGENCY_FIELDS.map(f=>'"'+f[0]+'"').join(", ");
   return "Request keys: "+r+"\nAgency keys (only if the email states the agency): "+a;
 }
@@ -422,7 +431,9 @@ async function readEmail(){
     "policyType is the line of business being cancelled (e.g. Auto, General Liability, Property, Package). "+
     "remarks = the stated reason for cancellation or any other cancellation-specific note. "+
     "If vehicles are mentioned, map them in order to veh1Make/veh1Model/veh1Vin, then veh2*/veh3*/veh4* (max 4). "+
-    "If drivers are mentioned, map them in order to drv1Name/drv1Dob/drv1License, then drv2*/drv3* (max 3).";
+    "If drivers are mentioned, map them in order to drv1Name/drv1Dob/drv1License, then drv2*/drv3* (max 3). "+
+    "Anything real and relevant that doesn't fit any key above (additional insured requests, mortgagee/lender detail, endorsements, "+
+    "anything else worth a human seeing) — don't invent a new key and don't drop it: summarize it under \"decPageNotes\" instead.";
   try{
     const resp=await fetch("/api/extract",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({text:raw,system})});
@@ -508,10 +519,11 @@ function decPageSystemPrompt(){
     "into drv1Name/drv1Dob/drv1License, then drv2*, drv3* — at most 3, ignore the rest. Leave a slot's keys as \"\" if there's no "+
     "that-numbered vehicle/driver (e.g. only 2 vehicles shown -> leave every veh3*/veh4* key blank). "+
     "This page may be Homeowners, Auto, Commercial Auto, General Liability, Workers Compensation, BOP, or Umbrella — use whichever "+
-    "of the listed keys applies and skip the rest (do not invent new keys for coverages this list has no field for, e.g. dwelling "+
-    "Coverage A-F or WC class codes/payroll — leaving those out is correct, not a mistake). Auto/GL liability limits, comp/collision "+
-    "deductibles, and coverage descriptions likewise have no key here — ACORD 127 itself has no field for them (it defers to ACORD 137), "+
-    "so don't return them under another key's name. "+
+    "of the listed keys applies. Read the ENTIRE page — every section, every line — you must account for everything on it, not just "+
+    "the fields above. Anything real and relevant that doesn't fit one of those keys (dwelling Coverage A-F limits, WC class codes/"+
+    "payroll, mortgagee/lienholder names, additional insureds, endorsements, deductibles or coverage detail beyond what's listed above, "+
+    "anything else worth a human seeing) — do NOT invent a new key and do NOT drop it: summarize it concisely, one line per item, under "+
+    "\"decPageNotes\" instead, so nothing you read on the page goes unreported. decPageNotes is a plain text summary, not JSON. "+
     "Also return \"_docType\" as your one-line best guess of the policy's line of business (e.g. \"Homeowners HO-3\", \"Commercial Auto\", "+
     "\"General Liability\", \"Workers Compensation\").";
 }
